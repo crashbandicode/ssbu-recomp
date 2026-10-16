@@ -540,43 +540,66 @@ static void err_ShowErrorCode(Ctx *c) {                   /* (ErrorCode { uint32
 static void prepo_PlayReport_ctor(Ctx *c) { wr8(A0, 0); wr64(A0 + 0x20, 0); wr64(A0 + 0x28, 0); wr64(A0 + 0x30, 0); }
 
 /* ---------------------------------------------------------------- nn::aoc: the add-on content the player owns
- * The console lists the installed add-on contents of the running application by INDEX (add-on content id =
- * application id + 0x1000 + index). The game's DLC fighters, stages and costumes are data of the game update; an owned
- * add-on content only unlocks them. Which ones this player owns is his own fact: <exe folder>\..\config\dlc.txt
- * (SSBU_DLC_LIST overrides the path), one index per line, decimal or 0x.. hex, `#` comments; tools\dlc_list.py writes
- * it from the file names of the player's own DLC dumps. No file = none owned (as before). */
-static int g_aoc[2048], g_aoc_n = -1;
-static void aoc_load(void) {
-    char exe[MAX_PATH], path[MAX_PATH + 32];
-    const char *e = getenv("SSBU_DLC_LIST");
-    if (e && e[0]) snprintf(path, sizeof path, "%s", e);
-    else {
-        GetModuleFileNameA(NULL, exe, MAX_PATH);
-        char *s = strrchr(exe, '\\');
-        if (s) *s = 0;
-        snprintf(path, sizeof path, "%s\\..\\config\\dlc.txt", exe);
+ * The game imports only CountAddOnContent() -> int and ListAddOnContent(int *outIndices, int offset, int count) -> number
+ * written ([doc] the indices are add-on content title id - (application id + 0x1000)); nothing mounts add-on content.
+ * The packages are entitlements: every one of the 99 of this game holds a single 9-byte /dummy.txt (checked with
+ * tools/extract/dlc_list.py --files, 2026-10-15), the content itself is in the base game's data.arc.
+ * The list: the indices, one per line, decimal or 0x.. hex (# starts a comment), as tools/extract/dlc_list.py writes them
+ * from the player's own packages (scripts/setup.py --dlc). SSBU_AOC=<file> (or SSBU_DLC_LIST) names it; unset, it is
+ * looked for beside the exe's folder, not the current directory: <exe folder>\..\sysdata\aoc.txt (the build folder's,
+ * from setup.py), then <exe folder>\..\config\dlc.txt (tools/audit/dlc_list.py). No list: none installed. */
+#define AOC_MAX 2048
+static int g_aoc[AOC_MAX], g_aoc_count = -1;
+static FILE *aoc_open(const char **path) {
+    static char found[MAX_PATH + 32];
+    *path = getenv("SSBU_AOC");
+    if (!*path || !(*path)[0]) *path = getenv("SSBU_DLC_LIST");
+    if (*path && (*path)[0]) {
+        FILE *f = fopen(*path, "r");
+        if (!f) printf("nn::aoc: %s cannot be read: no add-on content\n", *path);
+        return f;
     }
-    int n = 0;
-    FILE *fp = fopen(path, "r");
-    char ln[128];
-    while (fp && fgets(ln, sizeof ln, fp) && n < (int)(sizeof g_aoc / sizeof g_aoc[0])) {
-        char *p = ln, *end;
-        while (*p == ' ' || *p == '\t') p++;
-        if (*p == '#' || *p == '\r' || *p == '\n' || !*p) continue;
-        long v = strtol(p, &end, 0);
-        if (end != p && v > 0 && v < 0x1000) g_aoc[n++] = (int)v;
+    char exe[MAX_PATH];
+    DWORD len = GetModuleFileNameA(NULL, exe, MAX_PATH);
+    char *slash = len && len < MAX_PATH ? strrchr(exe, '\\') : NULL;
+    if (!slash) return NULL;
+    *slash = 0;
+    static const char *const rel[] = {"..\\sysdata\\aoc.txt", "..\\config\\dlc.txt"};
+    for (int i = 0; i < 2; i++) {
+        snprintf(found, sizeof found, "%s\\%s", exe, rel[i]);
+        FILE *f = fopen(found, "r");
+        if (f) { *path = found; return f; }
     }
-    if (fp) fclose(fp);
-    printf("nn::aoc: %d add-on content(s) owned (%s)\n", n, fp ? path : "no config\\dlc.txt");
-    g_aoc_n = n;
+    return NULL;
 }
-static void aoc_CountAddOnContent(Ctx *c) { if (g_aoc_n < 0) aoc_load(); RET(g_aoc_n); }
-static void aoc_ListAddOnContent(Ctx *c) {                 /* (int *out, int offset, int count) -> number written */
-    if (g_aoc_n < 0) aoc_load();
-    uint64_t out = A0;
-    int off = (int)A1, cnt = (int)A2, w = 0;
-    for (int i = off; out && i >= 0 && i < g_aoc_n && w < cnt; i++, w++) wr32(out + (uint64_t)w * 4, (uint32_t)g_aoc[i]);
-    RET(w);
+static void aoc_load(void) {                              /* once; a race would only read the same file twice */
+    if (g_aoc_count >= 0) return;
+    int n = 0;
+    const char *path;
+    FILE *f = aoc_open(&path);
+    if (f) {
+        char line[512];
+        while (fgets(line, sizeof line, f) && n < AOC_MAX) {
+            char *p = line, *end;
+            while (*p == ' ' || *p == '\t') p++;
+            long v = strtol(p, &end, 0);                  /* decimal or 0x.. hex (a leading 0 alone would read as octal: not written by either tool) */
+            if (end == p || v <= 0 || v >= AOC_MAX) continue;         /* comments, blank lines, out of range */
+            int dup = 0;
+            for (int i = 0; i < n; i++) dup |= g_aoc[i] == (int)v;
+            if (!dup) g_aoc[n++] = (int)v;
+        }
+        fclose(f);
+        for (int i = 1; i < n; i++) for (int j = i; j > 0 && g_aoc[j - 1] > g_aoc[j]; j--) { int t = g_aoc[j]; g_aoc[j] = g_aoc[j - 1]; g_aoc[j - 1] = t; }
+        printf("nn::aoc: %d add-on content(s) installed (%s)\n", n, path);
+    }
+    g_aoc_count = n;
+}
+static void aoc_CountAddOnContent(Ctx *c) { aoc_load(); RET(g_aoc_count); }
+static void aoc_ListAddOnContent(Ctx *c) {               /* (int *out, int offset, int count) -> number written */
+    aoc_load();
+    int offset = (int)A1, count = (int)A2, n = 0;
+    for (int i = offset; offset >= 0 && i < g_aoc_count && n < count; i++, n++) wr32(A0 + 4ull * (uint64_t)n, (uint32_t)g_aoc[i]);
+    RET(n);
 }
 
 /* ---------------------------------------------------------------- nn::util */

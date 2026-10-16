@@ -56,6 +56,9 @@ def main():
         p = os.path.join(a.build, 'sysdata', sub)
         if os.path.isdir(p):
             env[var] = p
+    aoc = os.path.join(a.build, 'sysdata', 'aoc.txt')              # the add-on content you own (scripts/setup.py --dlc)
+    if os.path.isfile(aoc):
+        env['SSBU_AOC'] = aoc
     if a.seq:
         with open(a.seq) as f:
             env['SSBU_SEQ'] = ' '.join(l.strip() for l in f if l.strip() and not l.startswith('#'))

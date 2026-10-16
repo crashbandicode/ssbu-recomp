@@ -7,6 +7,7 @@
     <folder>/exefs/    the title's ExeFS files: main  sdk  (rtld, subsdk0, main.npdm are not used), update applied
     <folder>/romfs/    the title's RomFS (data.arc ...), update applied
     optional: <folder>/sysdata/fonts (the system's shared fonts), <folder>/sysdata/zoneinfo
+    optional: --dlc <folder>   the game's add-on content packages (.nsp) you own: the runtime reports them as installed
 
 Nothing of the game is stored in the repository: every step below derives its files from the dump, into <repo>/build
 (ignored by git). Steps run in this order and are resumable (a finished step is skipped; --redo <step> repeats it,
@@ -220,6 +221,12 @@ def step_deps(cx):
         say('  dump: exefs, romfs, sysdata (fonts%s)' % (', zoneinfo' if os.path.isdir(os.path.join(sysdata, 'zoneinfo')) else ''))
     else:
         say('  dump: exefs, romfs   (no sysdata\\fonts: the game runs but its text uses no system font)')
+    dlc = a.dlc or (os.path.join(dump, 'dlc') if dump and os.path.isdir(os.path.join(dump, 'dlc')) else None)
+    if dlc:
+        if not os.path.isdir(dlc):
+            raise Fail('--dlc folder not found: %s' % dlc)
+        cx.state['dump']['dlc'] = os.path.abspath(dlc)
+        say('  dlc: %s (listed by step convert)' % cx.state['dump']['dlc'])
     if a.sdk_roots:
         if not os.path.isfile(a.sdk_roots):
             raise Fail('--sdk-roots file not found')
@@ -282,6 +289,11 @@ def step_convert(cx):
                 dst = os.path.join(cx.build, 'sysdata', sub)
                 if not os.path.isdir(dst):
                     shutil.copytree(os.path.join(d['sysdata'], sub), dst)
+    if d.get('dlc'):                                    # which add-on content packages the player owns (runtime/nnmisc.c, nn::aoc)
+        out = os.path.join(cx.build, 'sysdata', 'aoc.txt')
+        tail = cx.run('convert', [sys.executable, os.path.join(REPO, 'tools', 'extract', 'dlc_list.py'), d['dlc'], '--out', out],
+                      cwd=os.path.join(REPO, 'tools', 'extract'), log='convert_dlc')
+        say('  ' + next((l for l in reversed(tail.splitlines()) if 'add-on content packages' in l), 'add-on content listed') + ' -> ' + out)
 
 
 def step_modules(cx):
@@ -387,6 +399,8 @@ def game_env(cx, **extra):
         e['SSBU_FONTS'] = os.path.join(cx.build, 'sysdata', 'fonts')
     if os.path.isdir(os.path.join(cx.build, 'sysdata', 'zoneinfo')):
         e['SSBU_TZDIR'] = os.path.join(cx.build, 'sysdata', 'zoneinfo')
+    if os.path.isfile(os.path.join(cx.build, 'sysdata', 'aoc.txt')):
+        e['SSBU_AOC'] = os.path.join(cx.build, 'sysdata', 'aoc.txt')
     return e
 
 
@@ -436,6 +450,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--dump', help='folder with exefs\\ and romfs\\ (and optionally sysdata\\) dumped from your console')
     ap.add_argument('--exefs'), ap.add_argument('--romfs'), ap.add_argument('--sysdata')
+    ap.add_argument('--dlc', help='folder with your add-on content packages (.nsp) of the game (default <dump>\\dlc when it exists); '
+                                  'read by step convert (--redo convert after adding packages)')
     ap.add_argument('--build', help='build folder (default <repo>/build)')
     ap.add_argument('--jobs', type=int, help='parallel compiler jobs (default min(24, cpus))')
     ap.add_argument('--llvm', help='LLVM 9.0.0 folder (bin\\clang.exe)')

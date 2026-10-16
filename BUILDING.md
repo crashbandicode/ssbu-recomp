@@ -65,6 +65,12 @@ If you only have `.nsp` packages and your own keys, `tools/extract/romfs_extract
 (system fonts from a firmware dump) do the same; they read the keys from `~/.switch/prod.keys` and need
 `pip install pycryptodome`. This repository contains no keys and no link to any.
 
+Add-on content (DLC): give the folder with the game's DLC packages you own (`.nsp`) with `--dlc <folder>` (or put them
+in `<dump>/dlc`). Step `convert` reads each package (`tools/extract/dlc_list.py`: the title id from its NCA headers, so
+only the header key of `~/.switch/prod.keys` is needed) and writes the list to `build/sysdata/aoc.txt`; `scripts/run.py`
+passes it to the game (`SSBU_AOC`). The packages hold no game data (each has one 9-byte `/dummy.txt`): they only say
+what you own. After adding packages: `python scripts/setup.py --dump <dump> --dlc <folder> --redo convert`.
+
 ## The SDK function list
 
 `sdklift.py` lifts selected functions of the console SDK module (`sdk`) to C. Which functions, and where they must be cut
